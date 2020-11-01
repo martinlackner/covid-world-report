@@ -1,22 +1,12 @@
 import csv
 import datetime
+import sys
 import folium
-import pandas as pd
 import geopandas as gpd
 import wget
 import os
 import numpy as np
 import branca.colormap as cmp
-
-print('Downloading data ...')
-
-url = "https://covid.ourworldindata.org/data/owid-covid-data.csv"
-filename = "owid-covid-data.csv"
-if os.path.exists(filename):
-    os.rename(filename, filename+"("+str(datetime.datetime.now())+").csv")
-wget.download(url, filename)
-
-print('Download done.')
 
 
 def get_date_from_string(datestring):
@@ -88,10 +78,10 @@ def country_score_and_explanation(datarow):
             return 'n/a'
         return f"{x:.{prec}f}"
 
-    explanationstr += (f"score1 = {cond_print(subscores[0])} +"
-                       f" (new_cases_smoothed_per_million = {cond_print(new_cases_smoothed_per_million)})<br>")
+    explanationstr += (f"score1 = {cond_print(subscores[0])} " +
+                       f"(new_cases_smoothed_per_million = {cond_print(new_cases_smoothed_per_million)})<br>")
     explanationstr += f"score2 = {cond_print(subscores[1])} (positive_rate = {cond_print(positive_rate, 3)})<br>"
-    explanationstr += (f"score3 = {cond_print(subscores[2])} +"
+    explanationstr += (f"score3 = {cond_print(subscores[2])} " +
                        f"(new_deaths_smoothed_per_million = {cond_print(new_deaths_smoothed_per_million)})<br>")
 
     if maxscore is not None and maxscore > 200 and new_tests_smoothed_per_thousand is None:
@@ -135,108 +125,79 @@ def get_data_for_date(fulldata, date):
     return data_for_date
 
 
-# generate dates for which scores and maps are computed
-dates = set()
-for daysago in [1, 2, 3]:
-    dates.add(datetime.date.today() - datetime.timedelta(days=daysago))
-current_date = datetime.date(2020, 3, 6)
-while current_date < datetime.date.today():
-    dates.add(current_date)
-    current_date += datetime.timedelta(days=7)
-#
+def download():
+    print('Downloading data ...')
 
-for current_date in dates:
-    prevweek_date = current_date - datetime.timedelta(days=7)
+    url = "https://covid.ourworldindata.org/data/owid-covid-data.csv"
+    filename = "owid-covid-data.csv"
+    if os.path.exists(filename):
+        os.rename(filename, filename+"("+str(datetime.datetime.now())+").csv")
+    wget.download(url, filename)
 
-    print(f"computing scores for {current_date}")
+    print('Download done.')
 
-    data = []
-    with open('owid-covid-data.csv') as csvfile:
-        reader = csv.DictReader(csvfile)
-        for row in reader:
-            data.append(row)
 
-    # make compatible with geojson
-    for row in data:
-        if row["location"] == "South Korea":
-            row["location"] = "Republic of Korea"
-        if row["location"] == "Russia":
-            row["location"] = "Russian Federation"
-        if row["location"] == "Democratic Republic of Congo":
-            row["location"] = "Democratic Republic of the Congo"
-        if row["location"] == "Sint Maarten (Dutch part)":
-            row["location"] = "Sint Maarten"
-        if row["location"] == "Cote d'Ivoire":
-            row["location"] = "Côte d'Ivoire"
-    #
+def generate_index_html(dates, date_extrainfo):
+    # generate index.html
+    html = """
+    <!DOCTYPE html>
+    <html>
+    <body>
+    """
+    html += f"<h1 align=\"center\" style=\"font-size:16px\"><b>Covid scores</b></h1>"
+    html += "<ul>"
+    weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    for date in sorted(dates, reverse=True):
+        html += f"    <ul><a href=\"output/map-{date}.html\">{weekdays[date.weekday()]} {date}</a>: {date_extrainfo[date]}</ul>"
+    html += """
+    </ul>
+    </body>
+    </html>
+    """
+    with open("index.html", "w") as text_file:
+        print(f"{html}", file=text_file)
 
-    current_data = get_data_for_date(data, current_date)
-    prevweek_data = get_data_for_date(data, prevweek_date)
 
-    scores = {}
-    prev_scores = {}
-    explanations = {}
-    unranked = {}
+def generate_folium_map(current_date, scores, geojson):
 
-    for country in current_data.keys():
-        score, explanation = country_score_and_explanation(current_data[country])
-        if score is None:
-            unranked[country] = explanation
-        else:
-            scores[country] = score
-            explanations[country] = explanation
 
-    for country in prevweek_data.keys():
-        score, _ = country_score_and_explanation(prevweek_data[country])
-        if score is not None:
-            prev_scores[country] = score
+    print("generating map...")
 
-    # compute deltas
-    deltas = {}
-    for country in scores.keys():
-        try:
-            deltas[country] = scores[country] - prev_scores[country]
-        except KeyError:
-            pass
-    #
+    m = folium.Map(location=[45, 18], zoom_start=3, )
 
-    # print(f"{len(scores)} countries with sufficient information to be scored\n")
-    # ranking = [(k, v) for k, v in sorted(scores.items(), key=lambda item: item[1], reverse=True)]
-    # for i, (country, score) in enumerate(ranking):
-    #     try:
-    #         deltas[country] = score - prev_scores[country]
-    #         deltastr = f"{deltas[country]:+7.1f}"
-    #     except KeyError:
-    #         pass
-    #         deltastr = "n/a"
-    #     print(f"{i+1:3d}. {country:35} ... {score:6.1f}  ({deltastr:>7s})  {explanations[country]:20s}")
+    colormap = cmp.LinearColormap(
+        ['green', 'lightgreen'] + ['yellow'] * 2 + ['orange'] * 2 + ['darkorange'] * 2 + ['red'] * 4 + ['darkred'] * 8,
+        caption='Covid score'
+    ).to_step(index=[0, 25, 50, 100, 150, 200, 300, 500])
 
-    delta_msg = f"mean score: {np.mean(list(scores.values())):.1f} points, "
-    delta_msg += f"delta from a week ago: {np.mean(list(deltas.values())):+.1f} points"
-    print(delta_msg)
+    folium.GeoJson(
+        geojson,
+        style_function=lambda feature: {
+            'fillColor': (colormap(scores[feature["properties"]["NAME_LONG"]]) if
+                          feature["properties"]["NAME_LONG"] in scores.keys() else "grey"),
+            'color': 'black',
+            'weight': 1.2,
+            'fillOpacity': 0.6,
+            'lineOpacity': 0.6,
+        },
+        tooltip=folium.features.GeoJsonTooltip(
+            fields=["NAME_LONG_BOLD", "SCOREINFO", "DELTAINFO", "EXPLANATIONINFO"], labels=False)
+    ).add_to(m)
+    colormap.add_to(m)
 
-    # print()
-    # for (country, explanation) in unranked.items():
-    #     print(f"{country:35} ... None     {explanation}")
+    title_html = f"<h1 align=\"center\" style=\"font-size:16px\"><b>Covid score on {str(current_date)}</b></h1>"
+    title_html += f"<h3 align=\"center\" style=\"font-size:14px\">{delta_msg}</h3>"
+    m.get_root().html.add_child(folium.Element(title_html))
 
-    pd_raw_data = []
-    for country, score in scores.items():
-        if score > 500:
-            pd_raw_data.append([country, 499.9])
-        else:
-            pd_raw_data.append([country, score])
-    pd_scores = pd.DataFrame(pd_raw_data, columns=["country", "score"])
+    m.save(f"output/map-{current_date}.html")
+    print("---------------------------")
 
-    worldjson = gpd.read_file("ne_10m_admin_0_countries.geojson")
+    info = (f"mean score: {np.mean(list(scores.values())):.1f} points, " +
+            f"{len(scores)} scored countries")
+    return info
 
-    # warning if country in the owid data is missing in geojson
-    countries_json = []
-    for x in worldjson["NAME_LONG"]:
-        countries_json.append(x)
-    for country in [country for country, score in pd_raw_data]:
-        if country not in countries_json:
-            print(f"Warning: country \"{country}\" not found in json file")
 
+def add_info_to_worldjson():
     scoreinfo = []
     explanationinfo = []
     boldnames = []
@@ -261,55 +222,117 @@ for current_date in dates:
     worldjson["EXPLANATIONINFO"] = explanationinfo
     worldjson["NAME_LONG_BOLD"] = boldnames
 
-    print("generating map...")
 
-    m = folium.Map(location=[45, 18], zoom_start=3,)
+if __name__ == '__main__':
+    if "--no-download" not in sys.argv[1:]:
+        download()
+    else:
+        print("Option: --no-download used")
 
-    colormap = cmp.LinearColormap(
-        ['green', 'lightgreen'] + ['yellow'] * 2 + ['orange'] * 2 + ['darkorange'] * 2 + ['red'] * 4 + ['darkred'] * 8,
-        caption='Covid score'
-    ).to_step(index=[0, 25, 50, 100, 150, 200, 300, 500])
+    # generate dates for which scores and maps are computed
+    dates = set()
+    if "--only-fridays" not in sys.argv[1:]:
+        for daysago in [1, 2, 3]:
+            dates.add(datetime.date.today() - datetime.timedelta(days=daysago))
+    else:
+        print("Option: --only-fridays used")
+    current_date = datetime.date(2020, 3, 6)
+    while current_date < datetime.date.today():
+        dates.add(current_date)
+        current_date += datetime.timedelta(days=7)
+    #
 
-    folium.GeoJson(
-        worldjson,
-        style_function=lambda feature: {
-            'fillColor': (colormap(scores[feature["properties"]["NAME_LONG"]]) if
-                          feature["properties"]["NAME_LONG"] in scores.keys() else "grey"),
-            'color': 'black',
-            'weight': 1.2,
-            'fillOpacity': 0.6,
-            'lineOpacity': 0.6,
-        },
-        tooltip=folium.features.GeoJsonTooltip(
-            fields=["NAME_LONG_BOLD", "SCOREINFO", "DELTAINFO", "EXPLANATIONINFO"], labels=False)
-    ).add_to(m)
-    colormap.add_to(m)
+    # clear output dir
+    if os.path.exists("output"):
+        os.rename("output", "output-old-" + str(datetime.datetime.now()))
+    if not os.path.exists("output"):
+        os.mkdir("output")
+    #
 
-    title_html = f"<h1 align=\"center\" style=\"font-size:16px\"><b>Covid score on {str(current_date)}</b></h1>"
-    title_html += f"<h3 align=\"center\" style=\"font-size:14px\">{delta_msg}</h3>"
-    m.get_root().html.add_child(folium.Element(title_html))
+    date_extrainfo = {}
+    for current_date in dates:
+        prevweek_date = current_date - datetime.timedelta(days=7)
+    
+        print(f"computing scores for {current_date}")
+    
+        data = []
+        with open('owid-covid-data.csv') as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                data.append(row)
+    
+        # make compatible with geojson
+        for row in data:
+            if row["location"] == "South Korea":
+                row["location"] = "Republic of Korea"
+            if row["location"] == "Russia":
+                row["location"] = "Russian Federation"
+            if row["location"] == "Democratic Republic of Congo":
+                row["location"] = "Democratic Republic of the Congo"
+            if row["location"] == "Sint Maarten (Dutch part)":
+                row["location"] = "Sint Maarten"
+            if row["location"] == "Cote d'Ivoire":
+                row["location"] = "Côte d'Ivoire"
+        #
+    
+        current_data = get_data_for_date(data, current_date)
+        prevweek_data = get_data_for_date(data, prevweek_date)
+    
+        scores = {}
+        prev_scores = {}
+        explanations = {}
+        unranked = {}
+    
+        for country in current_data.keys():
+            score, explanation = country_score_and_explanation(current_data[country])
+            if score is None:
+                unranked[country] = explanation
+            else:
+                scores[country] = score
+                explanations[country] = explanation
+    
+        for country in prevweek_data.keys():
+            score, _ = country_score_and_explanation(prevweek_data[country])
+            if score is not None:
+                prev_scores[country] = score
+    
+        # compute deltas
+        deltas = {}
+        for country in scores.keys():
+            try:
+                deltas[country] = scores[country] - prev_scores[country]
+            except KeyError:
+                pass
+        #
+    
+        # print(f"{len(scores)} countries with sufficient information to be scored\n")
+        # ranking = [(k, v) for k, v in sorted(scores.items(), key=lambda item: item[1], reverse=True)]
+        # for i, (country, score) in enumerate(ranking):
+        #     try:
+        #         deltas[country] = score - prev_scores[country]
+        #         deltastr = f"{deltas[country]:+7.1f}"
+        #     except KeyError:
+        #         pass
+        #         deltastr = "n/a"
+        #     print(f"{i+1:3d}. {country:35} ... {score:6.1f}  ({deltastr:>7s})  {explanations[country]:20s}")
+    
+        delta_msg = f"mean score: {np.mean(list(scores.values())):.1f} points ({len(scores)} countries), "
+        delta_msg += f"delta from a week ago: {np.mean(list(deltas.values())):+.1f} points"
+        print(delta_msg)
 
-    m.save(f"output/map-{current_date}.html")
-    print("---------------------------")
+        worldjson = gpd.read_file("ne_10m_admin_0_countries.geojson")
 
-# generate index.html
-html = """
-<!DOCTYPE html>
-<html>
-<body>
-"""
-html += f"<h1 align=\"center\" style=\"font-size:16px\"><b>Covid scores</b></h1>"
-html += "<ul>"
-weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-for date in sorted(dates):
-    html += f"    <ul><a href=\"output/map-{date}.html\">{weekdays[date.weekday()]} {date}</a></ul>"
-html += """
-</ul>
-</body>
-</html>
-"""
+        # warning if country with score is missing in geojson
+        worldjson_countries = set(country for country in worldjson["NAME_LONG"])
+        for country in scores.keys():
+            if country not in worldjson_countries:
+                print(f"Warning: country \"{country}\" not found in json file")
 
-with open("index.html", "w") as text_file:
-    print(f"{html}", file=text_file)
+        add_info_to_worldjson()
 
-print("\nDone.")
+        info = generate_folium_map(current_date, scores, worldjson)
+        date_extrainfo[current_date] = info
+
+    generate_index_html(dates, date_extrainfo)
+    
+    print("\nDone.")
