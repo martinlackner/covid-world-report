@@ -3,3 +3,4 @@ owid*.csv
 venv
 .idea
 output-old*
+*.tmp
