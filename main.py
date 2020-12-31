@@ -7,6 +7,7 @@ import wget
 import os
 import numpy as np
 import branca.colormap as cmp
+import shutil
 
 
 def get_date_from_string(datestring):
@@ -131,7 +132,8 @@ def download():
     url = "https://covid.ourworldindata.org/data/owid-covid-data.csv"
     filename = "owid-covid-data.csv"
     if os.path.exists(filename):
-        os.rename(filename, filename+"("+str(datetime.datetime.now())+").csv")
+        # os.rename(filename, filename+"("+str(datetime.datetime.now())+").csv")
+        os.remove(filename)
     wget.download(url, filename)
 
     print('Download done.')
@@ -244,7 +246,8 @@ if __name__ == '__main__':
 
     # clear output dir
     if os.path.exists("output"):
-        os.rename("output", "output-old-" + str(datetime.datetime.now()))
+        # os.rename("output", "output-old-" + str(datetime.datetime.now()))
+        shutil.rmtree("output")
     if not os.path.exists("output"):
         os.mkdir("output")
     #
@@ -273,6 +276,14 @@ if __name__ == '__main__':
                 row["location"] = "Sint Maarten"
             if row["location"] == "Cote d'Ivoire":
                 row["location"] = "Côte d'Ivoire"
+            if row["location"] == "Curacao":
+                row["location"] = "Curaçao"
+            if row["location"] == "North Macedonia":
+                row["location"] = "Macedonia"
+            if row["location"] == "Czechia":
+                row["location"] = "Czech Republic"
+            if row["location"] == "Cape Verde":
+                row["location"] = "Republic of Cabo Verde"
         #
     
         current_data = get_data_for_date(data, current_date)
